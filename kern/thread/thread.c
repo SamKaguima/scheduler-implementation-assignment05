@@ -373,6 +373,9 @@ thread_shutdown(void)
 /*
  * Thread system initialization.
  */
+
+static struct threadlist mlfq_queues[MLFQ_LEVELS];
+
 void
 thread_bootstrap(void)
 {
@@ -397,6 +400,11 @@ thread_bootstrap(void)
 	KASSERT(curthread->t_proc == kproc);
 
 	/* Done */
+
+        for (int i = 0; i < MLFQ_LEVELS; i++) {
+            threadlist_init(&mlfq_queues[i]);
+        }
+
 }
 
 /*
@@ -456,6 +464,24 @@ static
 void
 thread_make_runnable(struct thread *target, bool already_have_lock)
 {
+
+ if (!already_have_lock) {
+        spinlock_acquire(&curcpu->c_runqueue_lock);
+    }
+
+    target->t_state = S_READY;
+
+    // Put in the correct queue based on its priority level
+    int level = target->priority_level;
+    threadlist_addtail(&mlfq_queues[level], target);
+
+    if (!already_have_lock) {
+        spinlock_release(&curcpu->c_runqueue_lock);
+    }
+
+
+
+
 	struct cpu *targetcpu;
 
 	/* Lock the run queue of the target thread's cpu. */
@@ -843,11 +869,33 @@ thread_timeryield(void)
 void
 schedule(void)
 {
-	/*
-	 * You can write this. If we do nothing, threads will run in
-	 * round-robin fashion.
-	 */
+
+    struct thread *next = NULL;
+
+    // Check each queue in order of priority
+    for (int i = 0; i < MLFQ_LEVELS; i++) {
+        if (!threadlist_isempty(&mlfq_queues[i])) {
+            next = threadlist_remhead(&mlfq_queues[i]);
+            break;
+        }
+    }
+
+    if (next == NULL) {
+        panic("schedule: No threads to run!");
+    }
+
+    curthread = next;
+    next->t_state = S_RUN;
+    thread_switch(S_RUN, false, NULL, &curcpu->c_runqueue_lock);
 }
+
+}
+
+void mlfq_handle_timer(void) {
+    if (curthread->priority_level < MLFQ_LEVELS - 1) {
+        curthread->priority_level++;
+}
+
 
 /*
  * Thread migration.
